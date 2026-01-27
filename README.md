@@ -47,7 +47,11 @@ const cookies = parseCookies(fileData)
 const bot = createBot({
     username: 'Generel_Schwerz',
     auth: 'cookies',
-    cookies: cookies, // required if using cookies auth
+    cookieOptions: {
+        // headless: false,
+        cookies: cookies,   // Required.
+        // proxy: "socks5://127.0.0.1:1080" // optional, can be a ProxyConfig object or a string URL
+    },
 })
 ```
 

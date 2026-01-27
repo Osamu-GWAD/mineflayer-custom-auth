@@ -12,7 +12,7 @@ export interface ProxyConfig {
 }
 
 export interface CookieOptions {
-  cookies?: cookie.Cookie[];
+  cookies: cookie.Cookie[];
   proxy?: ProxyConfig | string;
   headless?: boolean;
   executablePath?: string;
