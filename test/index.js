@@ -16,7 +16,10 @@ const bot = createBot({
     cookieOptions: {
         headless: false,
         cookies: cookies,   
-        // proxy: "socks5://127.0.0.1:1080" // optional, can be a ProxyConfig object or a string URL
+        
+        // Note: do NOT include http:// or https://, this is handled internally.
+        // this also does not support SOCKS5 proxies.
+        // proxy: "127.0.0.1:1080" // optional, can be a ProxyConfig object or a string URL
     },
     profilesFolder: __dirname + '/cache'
 })
