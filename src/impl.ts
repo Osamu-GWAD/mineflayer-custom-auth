@@ -30,10 +30,12 @@ async function authenticateWithCache(client: Client, clientOptions: ClientOption
   // technically, this will always be a string. potential typing error on pris-auth's end?
   const cachePath = clientOptions.profilesFolder as unknown as string; // validated above.
   const auth = new MinecraftAuthenticator(cachePath, cookieOptions.headless, cookieOptions.executablePath);
+  const proxy = cookieOptions.proxy;
+
 
   try {
     // Try to pre-authenticate and prepare cache
-    const authResult = await auth.processAccount(clientOptions.username, cookieOptions.cookies);
+    const authResult = await auth.processAccount(clientOptions.username, cookieOptions.cookies, proxy);
 
     if (authResult.success) {
       debug(`Pre-authentication ${authResult.fromCache ? "from cache" : "successful"}`);
