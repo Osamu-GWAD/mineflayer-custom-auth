@@ -3,8 +3,7 @@ dist
 build
 yarn.*
 package-lock*
-
-
+pnpm-lock.yaml
 
 cache
 test/data
