@@ -10,8 +10,14 @@ export type CachedAccessToken = {
   };
 };
 
+type MinecraftJavaCacheEntry = {
+  mca?: CachedAccessToken["data"];
+};
+
 type MinecraftJavaTokenManagerLike = {
-  getCachedAccessToken: () => Promise<unknown>;
+  cache: {
+    getCached: () => Promise<unknown>;
+  };
 };
 
 function getJwtExpiry(accessToken: string): number | undefined {
@@ -27,10 +33,10 @@ function getJwtExpiry(accessToken: string): number | undefined {
 }
 
 export function buildPatchedManager<T extends MinecraftJavaTokenManagerLike>(manager: T, accessToken: string): T {
-  const patchedManager = Object.create(Object.getPrototypeOf(manager)) as T;
-  Object.assign(patchedManager, manager);
+  const originalGetCached = manager.cache.getCached.bind(manager.cache);
 
-  patchedManager.getCachedAccessToken = async () => {
+  manager.cache.getCached = async () => {
+    const cached = await originalGetCached() as MinecraftJavaCacheEntry;
     const obtainedOn = Date.now();
     const until = getJwtExpiry(accessToken) ?? obtainedOn + 86400 * 1000;
     const remaining = until - Date.now();
@@ -40,10 +46,8 @@ export function buildPatchedManager<T extends MinecraftJavaTokenManagerLike>(man
     }
 
     return {
-      valid: true,
-      until,
-      token: accessToken,
-      data: {
+      ...cached,
+      mca: {
         access_token: accessToken,
         expires_in: Math.floor((until - obtainedOn) / 1000),
         obtainedOn,
@@ -52,5 +56,5 @@ export function buildPatchedManager<T extends MinecraftJavaTokenManagerLike>(man
     };
   };
 
-  return patchedManager;
+  return manager;
 }

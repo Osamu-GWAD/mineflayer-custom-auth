@@ -12,7 +12,11 @@ const microsoftAuth = require("minecraft-protocol/src/client/microsoftAuth");
 const debug = require("debug")("mineflayer-custom-auth");
 
 type AuthflowLike = {
-  mca: unknown;
+  mca: {
+    cache: {
+      getCached: () => Promise<unknown>;
+    };
+  };
 };
 
 type AuthClient = Client & {
@@ -110,7 +114,7 @@ function setAccessTokenAuthflow(client: Client, clientOptions: ClientOptions) {
   const authflow = authClient.authflow!;
 
   authflow.mca = buildPatchedManager(
-    authflow.mca as { getCachedAccessToken: () => Promise<unknown> },
+    authflow.mca,
     clientOptions.accessToken
   );
 }
