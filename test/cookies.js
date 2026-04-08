@@ -1,4 +1,4 @@
-const { createBot, cookie } = require('mineflayer-custom-auth')
+const { createBot, cookie } = require('../dist')
 const fs = require('fs')
 
 const { parseCookies } = cookie
@@ -10,8 +10,10 @@ const fileData = fs.readFileSync(cookiePath, 'utf-8')
 const cookies = parseCookies(fileData)
 
 const bot = createBot({
+    profilesFolder: __dirname + '/cache',
     username: 'Generel_Schwerz',
-    host: 'anticheat-test.com',
+    host: 'play.hypixel.net',
+
     auth: 'cookies',
     cookieOptions: {
         headless: false,
@@ -21,9 +23,12 @@ const bot = createBot({
         // this also does not support SOCKS5 proxies.
         // proxy: "127.0.0.1:1080" // optional, can be a ProxyConfig object or a string URL
     },
-    profilesFolder: __dirname + '/cache'
 })
 
 bot.on('spawn', () => {
     console.log(bot.username)
+})
+
+bot.on('kicked', (reason) => {
+    console.log('Kicked:', reason)
 })

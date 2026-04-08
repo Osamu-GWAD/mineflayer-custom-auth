@@ -10,7 +10,7 @@ import { CookieOptions } from "./types";
 
 declare module "mineflayer" {
   interface BotOptions {
-    auth: ClientOptions["auth"] | "cookies";
+    auth: ClientOptions["auth"] | "cookies" | "accessToken";
     cookieOptions?: CookieOptions;
   }
 }
@@ -19,3 +19,4 @@ declare module "mineflayer" {
 export type { CookieOptions } from "./types";
 export { createBot } from "./impl";
 export { cookie } from './cookies/cookie';
+export { buildPatchedManager } from "./accessToken";

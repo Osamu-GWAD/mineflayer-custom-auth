@@ -1,18 +1,40 @@
 import path from "path";
 import { MinecraftAuthenticator } from "./cookies/cookieManager";
+import { buildPatchedManager } from "./accessToken";
 import { BotOptions, createBot as oldCreateBot } from "mineflayer";
-import {cookie} from './cookies/cookie'
 import type { Client, ClientOptions } from "minecraft-protocol";
 import { CookieOptions } from ".";
 
 // Constants
+const { Authflow, Titles } = require("prismarine-auth");
 const minecraftFolderPath = require("minecraft-folder-path");
 const microsoftAuth = require("minecraft-protocol/src/client/microsoftAuth");
 const debug = require("debug")("mineflayer-custom-auth");
 
+type AuthflowLike = {
+  mca: unknown;
+};
+
+type AuthClient = Client & {
+  authflow?: AuthflowLike;
+};
+
+type ExtendedClientOptions = ClientOptions & {
+  deviceType?: string;
+  flow?: string;
+  haveCredentials?: boolean;
+};
+
 function validateOptions(options: ClientOptions) {
+  const extendedOptions = options as ExtendedClientOptions;
+
   if (!options.profilesFolder) {
     options.profilesFolder = path.join(minecraftFolderPath, "nmp-cache");
+  }
+  if (options.authTitle === undefined) {
+    options.authTitle = Titles.MinecraftNintendoSwitch;
+    extendedOptions.deviceType = "Nintendo";
+    extendedOptions.flow = "live";
   }
 }
 
@@ -71,6 +93,33 @@ const maybeClearCookieCache = async (client: Client, clientOptions: ClientOption
   }
 };
 
+function setAccessTokenAuthflow(client: Client, clientOptions: ClientOptions) {
+  const authClient = client as AuthClient;
+  const extendedOptions = clientOptions as ExtendedClientOptions;
+
+  validateOptions(clientOptions);
+
+  if (!clientOptions.accessToken) {
+    throw new Error('Missing "accessToken" for accessToken authentication.');
+  }
+
+  if (!authClient.authflow) {
+    authClient.authflow = new Authflow(clientOptions.username, clientOptions.profilesFolder, extendedOptions, clientOptions.onMsaCode);
+  }
+
+  const authflow = authClient.authflow!;
+
+  authflow.mca = buildPatchedManager(
+    authflow.mca as { getCachedAccessToken: () => Promise<unknown> },
+    clientOptions.accessToken
+  );
+}
+
+async function authenticateWithAccessToken(client: Client, clientOptions: ClientOptions) {
+  setAccessTokenAuthflow(client, clientOptions);
+  await microsoftAuth.authenticate(client, clientOptions);
+}
+
 export function createBot(botOptions: BotOptions) {
   switch (botOptions.auth) {
     case "cookies": {
@@ -83,8 +132,14 @@ export function createBot(botOptions: BotOptions) {
       break;
     }
 
+    case "accessToken": {
+      botOptions.auth = authenticateWithAccessToken;
+      break;
+    }
+
     case "microsoft": {
       botOptions.auth = maybeClearCookieCache;
+      break;
     }
   }
 
