@@ -1,60 +1,80 @@
-# Mineflayer Custom Auth
+# mineflayer-custom-auth
 
+Extra authentication methods for `mineflayer`, focused on cases that do not fit cleanly into the main project.
 
-## Why do it in a separate package?
-Because these methods of logging in may be more involved. For example, this cookie login uses Puppeteer, which definitely won't be merged.
+Right now this package supports:
 
-## Known Limitations
-If you switch back and forth between authenticating via microsoft and cookies, using the same username, it will clear the cache whenever you switch.
+- Microsoft cookie-based login
+- Direct `accessToken` login
 
-This shouldn't be an issue for most use-cases, so I'll fix if someone has an issue.
+## Why this exists
 
-## Login-type specific documentation
-- [Cookies](./docs/COOKIES.md)
+Some auth flows are heavier than normal bot setup. Cookie login, for example, uses Puppeteer and extra cache handling, which makes it a better fit as a separate package instead of a built-in `mineflayer` feature.
 
 ## Installation
-```bash
-# npm
-npm install mineflayer-custom-auth
 
-# yarn
-yarn add mineflayer-custom-auth
+```bash
+npm install mineflayer-custom-auth
 ```
 
+## Quick Start
 
-## Usage
+### Cookie login
+
 ```ts
-// typescript usage:
-import { createBot, cookie } from 'mineflayer-custom-auth'
-import fs from 'fs' 
+import { createBot, cookie } from "mineflayer-custom-auth";
+import fs from "fs";
 
-// or in javascript:
-const { createBot, cookie } = require('mineflayer-custom-auth')
-const fs = require('fs')
+const { parseCookies } = cookie;
 
-
-// cookie namespace has everything you need to parse cookies.
-const {parseCookies} = cookie
-
-// read file contents into a string
-const cookiePath = '<file name>';
-const fileData = fs.readFileSync(cookiePath, 'utf-8')
-
-// provided utility method to parse cookies.
-const cookies = parseCookies(fileData)
-
+const fileData = fs.readFileSync("./cookies.txt", "utf8");
+const cookies = parseCookies(fileData);
 
 const bot = createBot({
-    username: 'Generel_Schwerz',
-    auth: 'cookies',
-    cookieOptions: {
-        // headless: false,
-        cookies: cookies,   // Required.
-        
-        // Note: do NOT include http:// or https://, this is handled internally.
-        // this also does not support SOCKS5 proxies.
-        // proxy: "127.0.0.1:1080" // optional, can be a ProxyConfig object or a string URL
-    },
-})
+  username: "Generel_Schwerz",
+  host: "play.hypixel.net",
+  auth: "cookies",
+  cookieOptions: {
+    cookies,
+    // headless: false,
+    // proxy: "127.0.0.1:1080",
+  },
+});
+
+bot.on("spawn", () => {
+  console.log(bot.username);
+});
 ```
 
+Cookie file formatting is documented here:
+
+- [Cookie Login Docs](./docs/COOKIES.md)
+
+### Access token login
+
+```ts
+import { createBot } from "mineflayer-custom-auth";
+
+const bot = createBot({
+  username: "Generel_Schwerz",
+  host: "play.hypixel.net",
+  auth: "accessToken",
+  accessToken: "your-minecraft-access-token",
+});
+
+bot.on("spawn", () => {
+  console.log(bot.username);
+});
+```
+
+## Notes
+
+- If you switch the same username between `microsoft` auth and `cookies` auth, the cookie cache may be cleared.
+- Proxy support is HTTP-only right now. Do not include `http://` or `https://` in the proxy string.
+- The `accessToken` flow relies on the same upstream Microsoft auth path in `minecraft-protocol`, but swaps in your supplied Minecraft token through a patched `prismarine-auth` manager.
+
+## Support
+
+If this package saves you time and you want to support the project:
+
+- [Ko-fi: generel](https://ko-fi.com/generel)
