@@ -1,9 +1,10 @@
 import path from "path";
 import { MinecraftAuthenticator } from "./cookies/cookieManager";
-import { buildPatchedManager } from "./accessToken";
+import { buildJavaPatchedManager, buildLivePatchedManager } from "./tokenAccess";
 import { BotOptions, createBot as oldCreateBot } from "mineflayer";
 import type { Client, ClientOptions } from "minecraft-protocol";
 import { CookieOptions } from ".";
+import { LiveCacheEntry, MinecraftJavaCacheEntry } from "./types";
 
 // Constants
 const { Authflow, Titles } = require("prismarine-auth");
@@ -11,16 +12,21 @@ const minecraftFolderPath = require("minecraft-folder-path");
 const microsoftAuth = require("minecraft-protocol/src/client/microsoftAuth");
 const debug = require("debug")("mineflayer-custom-auth");
 
-type AuthflowLike = {
+type AuthflowLike<T extends unknown> = {
   mca: {
     cache: {
-      getCached: () => Promise<unknown>;
+      getCached: () => Promise<T>;
     };
   };
+  msa: {
+    cache: {
+      getCached: () => Promise<T>;
+    };
+  }
 };
 
 type AuthClient = Client & {
-  authflow?: AuthflowLike;
+  authflow?: AuthflowLike<MinecraftJavaCacheEntry & LiveCacheEntry>;
 };
 
 type ExtendedClientOptions = ClientOptions & {
@@ -97,30 +103,70 @@ const maybeClearCookieCache = async (client: Client, clientOptions: ClientOption
   }
 };
 
-function setAccessTokenAuthflow(client: Client, clientOptions: ClientOptions) {
+
+function accessTokenWarningGate(client: Client, clientOptions: ClientOptions) {
+  if (!clientOptions.javaAccessToken) {
+    console.warn("No javaAccessToken provided in client options. Access token authentication may fail.");
+    refreshTokenWarningGate(client, clientOptions, true);
+  }
+}
+
+function refreshTokenWarningGate(client: Client, clientOptions: ClientOptions, wasAccessTokenFlow = false) {
+  if (!clientOptions.liveAccessToken && !clientOptions.liveRefreshToken) {
+    throw new Error("No access tokens provided in client options. Access token authentication cannot proceed.");
+  } else {
+    console.warn("liveAccessToken or liveRefreshToken is provided, so live authentication may still work.");
+    if (wasAccessTokenFlow) {
+      console.warn("Try \"refreshToken\" as your auth method in bot options instead.");
+    }
+  }
+}
+
+function customTokenAuthFlow(client: Client, clientOptions: ClientOptions) {
   const authClient = client as AuthClient;
   const extendedOptions = clientOptions as ExtendedClientOptions;
 
   validateOptions(clientOptions);
-
-  if (!clientOptions.accessToken) {
-    throw new Error('Missing "accessToken" for accessToken authentication.');
-  }
 
   if (!authClient.authflow) {
     authClient.authflow = new Authflow(clientOptions.username, clientOptions.profilesFolder, extendedOptions, clientOptions.onMsaCode);
   }
 
   const authflow = authClient.authflow!;
+  
+  if (clientOptions.javaAccessToken) {
+    authflow.mca = buildJavaPatchedManager(
+      authflow.mca,
+      clientOptions.javaAccessToken!
+    );
+  }
 
-  authflow.mca = buildPatchedManager(
-    authflow.mca,
-    clientOptions.accessToken
-  );
+  // skip next loader if not needed.
+  
+  if (!clientOptions.liveAccessToken && !clientOptions.liveRefreshToken) return;
+
+  if (extendedOptions.flow === 'live' || extendedOptions.flow === 'sisu') {
+    authflow.msa = buildLivePatchedManager(
+      authflow.msa,
+      {
+        accessToken: clientOptions.liveAccessToken,
+        refreshToken: clientOptions.liveRefreshToken,
+      }
+    );
+  } else {
+    throw new Error(`Unsupported auth flow "${extendedOptions.flow}". Only "live" and "sisu" flows are supported for live token patching.`);
+  }
 }
 
 async function authenticateWithAccessToken(client: Client, clientOptions: ClientOptions) {
-  setAccessTokenAuthflow(client, clientOptions);
+  accessTokenWarningGate(client, clientOptions);
+  customTokenAuthFlow(client, clientOptions);
+  await microsoftAuth.authenticate(client, clientOptions);
+}
+
+async function authenticateWithRefreshToken(client: Client, clientOptions: ClientOptions) {
+  refreshTokenWarningGate(client, clientOptions);
+  customTokenAuthFlow(client, clientOptions);
   await microsoftAuth.authenticate(client, clientOptions);
 }
 
@@ -138,6 +184,11 @@ export function createBot(botOptions: BotOptions) {
 
     case "accessToken": {
       botOptions.auth = authenticateWithAccessToken;
+      break;
+    }
+
+    case "refreshToken": {
+      botOptions.auth = authenticateWithRefreshToken;
       break;
     }
 

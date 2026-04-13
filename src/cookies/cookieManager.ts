@@ -19,6 +19,7 @@ const FileCache = require("prismarine-auth/src/common/cache/FileCache");
 const debug = require('debug')('mineflayer-custom-auth')
 
 import {cookie} from './cookie'
+import { MinecraftAuthCache } from "../types";
 
 /**
  * Interface for proxy configuration
@@ -30,20 +31,7 @@ interface ProxyConfig {
   password: string;
 }
 
-/**
- * Interface for Minecraft authentication cache object
- */
-interface MinecraftAuthCache {
-  mca: {
-    username: string;
-    roles: string[];
-    metadata: Record<string, unknown>;
-    access_token: string;
-    expires_in: number;
-    token_type: string;
-    obtainedOn: number;
-  };
-}
+
 
 interface ProcessAccRes {
   success: boolean;

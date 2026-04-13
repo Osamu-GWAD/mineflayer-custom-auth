@@ -10,8 +10,16 @@ import { CookieOptions } from "./types";
 
 declare module "mineflayer" {
   interface BotOptions {
-    auth: ClientOptions["auth"] | "cookies" | "accessToken";
+    auth: ClientOptions["auth"] | "cookies" | "accessToken" | "refreshToken";
     cookieOptions?: CookieOptions;
+  }
+}
+
+declare module "minecraft-protocol" {
+  interface ClientOptions {
+    javaAccessToken?: string;
+    liveAccessToken?: string;
+    liveRefreshToken?: string;
   }
 }
 
@@ -19,4 +27,4 @@ declare module "mineflayer" {
 export type { CookieOptions } from "./types";
 export { createBot } from "./impl";
 export { cookie } from './cookies/cookie';
-export { buildPatchedManager } from "./accessToken";
+export { buildJavaPatchedManager as buildPatchedManager } from "./tokenAccess";
