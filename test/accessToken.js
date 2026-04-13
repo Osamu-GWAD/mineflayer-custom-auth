@@ -7,6 +7,7 @@ const bot = createBot({
 
     // custom auth
     // auth: 'accessToken',
+    // javaAccessToken: 'wfqwfwe....',
     auth: 'refreshToken',
     liveAccessToken: 'EwDoA+pvBAAUKods...'
 })
