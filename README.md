@@ -59,7 +59,7 @@ const bot = createBot({
   username: "Generel_Schwerz",
   host: "play.hypixel.net",
   auth: "accessToken",
-  accessToken: "your-minecraft-access-token",
+  javaAccessToken: "your-minecraft-access-token",
 });
 
 bot.on("spawn", () => {

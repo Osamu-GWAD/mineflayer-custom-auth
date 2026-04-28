@@ -159,7 +159,7 @@ class MinecraftAuthenticator {
     // First, check if we already have a valid cached token
     const cachedToken = await this.getCachedAccessToken(referencedUsername);
     if (cachedToken && cachedToken.valid) {
-      debug(`✅ Already authenticated via cache: ${referencedUsername}`);
+      debug(`Already authenticated via cache: ${referencedUsername}`);
       // Still add to alts.txt to ensure it's listed
       return {
         success: true,
