@@ -24,6 +24,7 @@
     "minecraft-folder-path": "^1.2.0",
     "puppeteer": "^24.4.0",
     "socks-proxy-agent": "^10.0.0",
+    "tough-cookie": "^6.0.1",
     "user-agents": "^2.1.53"
   }
 }

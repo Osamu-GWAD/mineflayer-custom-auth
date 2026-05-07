@@ -2,6 +2,7 @@ import https from "https";
 import type { IncomingHttpHeaders } from "http";
 import fs from "fs";
 import path from "path";
+import { Cookie as ToughCookie, CookieJar } from "tough-cookie";
 import { cookie } from "./cookie";
 import { buildProxyUrl } from "./proxy";
 import type { ProxyConfig } from "../types";
@@ -43,8 +44,6 @@ type ContinueForm = {
   body: string;
 };
 
-type CookieJar = cookie.Cookie[];
-
 type MinecraftLoginResponse = {
   access_token?: string;
 };
@@ -75,6 +74,8 @@ type SilentAuthFailureReason =
   | "sisu_callback_no_minecraft_redirect"
   | "sisu_redirect_error"
   | "sisu_redirect_missing_access_token";
+
+type BrowserlessCookieJar = CookieJar;
 
 export type CookieBrowserlessAuthResult = {
   username: string;
@@ -264,75 +265,65 @@ function getSetCookieHeaders(response: HttpResponse) {
   return Array.isArray(header) ? header : [header];
 }
 
-function defaultCookiePath(requestPath: string) {
-  if (!requestPath || requestPath === "/") return "/";
-
-  const lastSlash = requestPath.lastIndexOf("/");
-  return lastSlash <= 0 ? "/" : requestPath.slice(0, lastSlash);
+function getCookieUrl(item: cookie.Cookie) {
+  return `https://${item.domain.replace(/^\./, "")}${item.path ?? "/"}`;
 }
 
-function parseSetCookie(header: string, fromUrl: string): cookie.Cookie | undefined {
-  const url = new URL(fromUrl);
-  const parts = header.split(";").map((part) => part.trim());
-  const [nameValue, ...attributes] = parts;
-  const separator = nameValue.indexOf("=");
-  if (separator <= 0) return undefined;
-
-  const ret: cookie.Cookie = {
-    name: nameValue.slice(0, separator),
-    value: nameValue.slice(separator + 1),
-    domain: url.hostname,
-    path: defaultCookiePath(url.pathname),
-    expires: -1,
-    httpOnly: false,
-    secure: false,
-    sameSite: "Lax",
-  };
-
-  for (const attribute of attributes) {
-    const [rawName, ...rawValue] = attribute.split("=");
-    const name = rawName.toLowerCase();
-    const value = rawValue.join("=");
-
-    if (name === "domain" && value) ret.domain = value.toLowerCase();
-    if (name === "path" && value) ret.path = value;
-    if (name === "secure") ret.secure = true;
-    if (name === "httponly") ret.httpOnly = true;
-    if (name === "expires" && value) ret.expires = Math.floor(new Date(value).getTime() / 1000);
-    if (name === "max-age" && value) ret.expires = Math.floor(Date.now() / 1000) + Number(value);
-  }
-
-  return ret;
+function toToughCookie(item: cookie.Cookie) {
+  return new ToughCookie({
+    key: item.name,
+    value: item.value,
+    domain: item.domain.replace(/^\./, ""),
+    path: item.path ?? "/",
+    expires: typeof item.expires === "number" && item.expires > 0 ? new Date(item.expires * 1000) : "Infinity",
+    httpOnly: item.httpOnly ?? false,
+    secure: item.secure ?? false,
+    sameSite: typeof item.sameSite === "string" ? item.sameSite : undefined,
+  });
 }
 
-function mergeCookie(jar: CookieJar, next: cookie.Cookie) {
-  const nextDomain = next.domain.toLowerCase();
-  const nextPath = next.path ?? "/";
-  const index = jar.findIndex((item) => item.name === next.name && item.domain.toLowerCase() === nextDomain && (item.path ?? "/") === nextPath);
+function createCookieJar(cookies: cookie.Cookie[]) {
+  const jar = new CookieJar(undefined, {
+    rejectPublicSuffixes: false,
+    prefixSecurity: "unsafe-disabled",
+  });
 
-  if (typeof next.expires === "number" && next.expires > 0 && next.expires <= Math.floor(Date.now() / 1000)) {
-    if (index !== -1) jar.splice(index, 1);
-    return;
+  for (const item of cookies) {
+    if (!item.name || !item.value || item.value === "Disabled" || !item.domain) continue;
+
+    jar.setCookieSync(toToughCookie(item), getCookieUrl(item), {
+      ignoreError: true,
+      http: true,
+    });
   }
 
-  if (index === -1) {
-    jar.push(next);
-  } else {
-    jar[index] = next;
-  }
+  return jar;
 }
 
-function storeSetCookies(jar: CookieJar, response: HttpResponse, fromUrl: string) {
+function getCookieHeader(jar: BrowserlessCookieJar, urlString: string, required = false) {
+  const matchingCookies = jar.getCookiesSync(urlString, { http: true });
+
+  debug("cookies:header", redactUrl(urlString), {
+    matchingCookies: matchingCookies.length,
+    names: matchingCookies.map((item) => item.key),
+  });
+
+  if (required && matchingCookies.length === 0) return undefined;
+  return jar.getCookieStringSync(urlString, { http: true });
+}
+
+function storeSetCookies(jar: BrowserlessCookieJar, response: HttpResponse, fromUrl: string) {
   const headers = getSetCookieHeaders(response);
   if (headers.length === 0) return;
 
   const names: string[] = [];
   for (const header of headers) {
-    const parsed = parseSetCookie(header, fromUrl);
-    if (!parsed) continue;
+    const stored = jar.setCookieSync(header, fromUrl, {
+      ignoreError: true,
+      http: true,
+    });
 
-    names.push(parsed.name);
-    mergeCookie(jar, parsed);
+    if (stored) names.push(stored.key);
   }
 
   debug("cookies:set-cookie", redactUrl(fromUrl), {
@@ -369,41 +360,6 @@ function assertStatus(response: HttpResponse, expectedStatus: number, context: s
 
   const preview = getBodyPreview(response.body);
   throw new Error(`${context} failed with HTTP ${response.statusCode}${preview ? `: ${preview}` : ""}`);
-}
-
-function isCookieExpired(item: cookie.Cookie) {
-  return typeof item.expires === "number" && item.expires > 0 && item.expires <= Math.floor(Date.now() / 1000);
-}
-
-function domainMatches(host: string, cookieDomain: string) {
-  const normalizedHost = host.toLowerCase();
-  const normalizedDomain = cookieDomain.toLowerCase().replace(/^\./, "");
-
-  return normalizedHost === normalizedDomain || normalizedHost.endsWith(`.${normalizedDomain}`);
-}
-
-function pathMatches(requestPath: string, cookiePath?: string) {
-  if (!cookiePath || cookiePath === "/") return true;
-
-  return requestPath === cookiePath || requestPath.startsWith(cookiePath.endsWith("/") ? cookiePath : `${cookiePath}/`);
-}
-
-function buildCookieHeader(cookies: cookie.Cookie[], urlString: string) {
-  const url = new URL(urlString);
-  const matchingCookies = cookies
-    .filter((item) => item.name && item.value && item.value !== "Disabled")
-    .filter((item) => !isCookieExpired(item))
-    .filter((item) => domainMatches(url.hostname, item.domain))
-    .filter((item) => pathMatches(url.pathname, item.path))
-    .sort((a, b) => (b.path?.length ?? 0) - (a.path?.length ?? 0));
-
-  debug("cookies:header", redactUrl(urlString), {
-    totalCookies: cookies.length,
-    matchingCookies: matchingCookies.length,
-    names: matchingCookies.map((item) => item.name),
-  });
-
-  return matchingCookies.map((item) => `${item.name}=${item.value}`).join("; ");
 }
 
 function buildSisuConnectUrl() {
@@ -516,9 +472,9 @@ async function getSisuAuthorizeUrl(proxy?: ProxyConfig | string) {
   return buildFallbackMicrosoftAuthorizeUrl();
 }
 
-async function requestMicrosoftAuthorize(authorizeUrl: string, jar: CookieJar, proxy?: ProxyConfig | string) {
-  const cookieHeader = buildCookieHeader(jar, authorizeUrl);
-  if (isMicrosoftAuthorizeHost(authorizeUrl) && !cookieHeader) return undefined;
+async function requestMicrosoftAuthorize(authorizeUrl: string, jar: BrowserlessCookieJar, proxy?: ProxyConfig | string) {
+  const cookieHeader = getCookieHeader(jar, authorizeUrl, isMicrosoftAuthorizeHost(authorizeUrl));
+  if (cookieHeader == null) return undefined;
 
   const response = await request(authorizeUrl, {
     headers: {
@@ -538,14 +494,14 @@ async function requestMicrosoftAuthorize(authorizeUrl: string, jar: CookieJar, p
 async function submitMicrosoftContinueForm(
   fromUrl: string,
   response: HttpResponse,
-  jar: CookieJar,
+  jar: BrowserlessCookieJar,
   proxy?: ProxyConfig | string
 ): Promise<{ url: string; response: HttpResponse } | undefined> {
   const form = extractMicrosoftContinueForm(response.body, fromUrl);
   if (!form) return undefined;
 
   const requestUrl = form.method === "GET" && form.body ? `${form.action}${form.action.includes("?") ? "&" : "?"}${form.body}` : form.action;
-  const cookieHeader = buildCookieHeader(jar, requestUrl);
+  const cookieHeader = getCookieHeader(jar, requestUrl);
 
   debug("microsoft-continue:submit", {
     method: form.method,
@@ -576,7 +532,7 @@ async function submitMicrosoftContinueForm(
 async function resolveMicrosoftAuthorizeRedirect(
   authorizeUrl: string,
   authorizeResponse: HttpResponse,
-  jar: CookieJar,
+  jar: BrowserlessCookieJar,
   proxy?: ProxyConfig | string
 ) {
   let currentUrl = authorizeUrl;
@@ -628,10 +584,10 @@ async function resolveMicrosoftAuthorizeRedirect(
 
 async function getXblIdentityTokenFromSisu(cookies: cookie.Cookie[], proxy?: ProxyConfig | string) {
   debug("silent-auth:start");
-  const jar = [...cookies];
+  const jar = createCookieJar(cookies);
 
   const authorizeUrl = await getSisuAuthorizeUrl(proxy);
-  const cookieHeader = buildCookieHeader(jar, authorizeUrl);
+  const cookieHeader = getCookieHeader(jar, authorizeUrl, true);
   if (!cookieHeader) return failSilentAuth("missing_cookie_header", { authorizeUrl: redactUrl(authorizeUrl) });
 
   debug("microsoft-authorize:start", redactUrl(authorizeUrl));
