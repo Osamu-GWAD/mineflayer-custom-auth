@@ -1,314 +1,70 @@
 /**
  * Minecraft Authentication System
  *
- * This TypeScript application automates Minecraft account authentication by:
- * 1. Using Microsoft account cookies to authenticate
- * 2. Managing proxies for authentication requests
- * 3. Retrieving Minecraft access tokens
- * 4. Storing authentication data in cache files
+ * This module keeps the browser and browserless cookie auth paths separate.
+ * They share cache/proxy helpers, but each authenticator owns one execution path.
  */
 
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 import { generateCacheFileName } from "../utils";
+import { cookie } from "./cookie";
+import { assertBrowserProxy, buildProxyUrl } from "./proxy";
+import type { CookieAuthMethod, MinecraftAuthCache, ProxyConfig } from "../types";
+import { authenticateWithBrowserlessCookies } from "./browserless";
 
-// Import FileCache class from prismarine-auth
 const FileCache = require("prismarine-auth/src/common/cache/FileCache");
+const debug = require("debug")("mineflayer-custom-auth");
 
-const debug = require('debug')('mineflayer-custom-auth')
-
-import {cookie} from './cookie'
-import { MinecraftAuthCache } from "../types";
-
-/**
- * Interface for proxy configuration
- */
-interface ProxyConfig {
-  server: string;
-  port: string;
-  username: string;
-  password: string;
-}
-
-
-
-interface ProcessAccRes {
+export interface ProcessAccRes {
   success: boolean;
   fromCache: boolean;
   token?: string;
   error?: string;
 }
 
-/**
- * Class for handling Minecraft authentication
- */
-class MinecraftAuthenticator {
-  private readonly cachePath: string;
-  private readonly cacheName: string;
-  private readonly headless: boolean;
-  private readonly executableName: string;
+type CachedTokenResult = {
+  is_cookie: boolean;
+  valid: boolean;
+  until: number;
+  token: string;
+  data: MinecraftAuthCache["mca"];
+};
 
-  /**
-   * Constructor for MinecraftAuthenticator
-   *
-   * @param cachePath - Path to the cache directory
-   * @param outputFilePath - Path to the output file for authenticated accounts
-   */
-  constructor(cachePath = path.join(__dirname, "cache"), headless = false, executableName = "", cacheName = "mca") {
+export interface CookieAuthenticator {
+  processAccount(referencedUsername: string, cookies: cookie.Cookie[], proxyConfig?: ProxyConfig | string): Promise<ProcessAccRes>;
+  getToken(referencedUsername: string, cookies: cookie.Cookie[], proxyConfig?: ProxyConfig | string): Promise<string | undefined>;
+}
+
+export class CookieCacheManager {
+  protected readonly cachePath: string;
+  protected readonly cacheName: string;
+
+  constructor(cachePath = path.join(__dirname, "cache"), cacheName = "mca") {
     this.cachePath = cachePath;
     this.cacheName = cacheName;
-    this.headless = headless;
-    this.executableName = executableName;
     this.ensureCacheDirectory();
   }
 
-  /**
-   * Create cache directory if it doesn't exist
-   */
-  private ensureCacheDirectory(): void {
+  protected ensureCacheDirectory(): void {
     if (!fs.existsSync(this.cachePath)) {
       fs.mkdirSync(this.cachePath, { recursive: true });
     }
   }
 
-  /**
-   * Clear the cache directory
-   */
+  protected getCacheFile(username: string): typeof FileCache {
+    return new FileCache(generateCacheFileName(this.cachePath, this.cacheName, username));
+  }
+
   public clearCache(username: string): void {
-    const fileCache = new FileCache(generateCacheFileName(this.cachePath, this.cacheName, username));
-    fileCache.reset();
+    this.getCacheFile(username).reset();
   }
 
-  /**
-   * Parse a proxy string into its components
-   *
-   * @param proxyString - Proxy string in format "server:port:username:password"
-   * @returns Parsed proxy configuration
-   */
-  private parseProxyString(proxyString: string): ProxyConfig {
-    const [server, port, username, password] = proxyString.split(":");
-    return { server, port, username, password };
-  }
-
-  /**
-   * Extract access token from cookie string
-   *
-   * @param cookieString - String containing cookies
-   * @returns Access token or empty string if not found
-   */
-  private extractAccessToken(cookieString: string): string {
-    const bearerToken = "bearer_token=";
-    const start = cookieString.indexOf(bearerToken) + bearerToken.length;
-    if (start <= bearerToken.length) return "";
-
-    const end = cookieString.indexOf(";", start);
-    return end === -1 ? cookieString.substring(start) : cookieString.substring(start, end);
-  }
-
-  /**
-   * Create Minecraft authentication cache object
-   *
-   * @param accessToken - Minecraft access token
-   * @returns Minecraft authentication cache object
-   */
-  private createAuthCacheObject(accessToken: string): MinecraftAuthCache {
-    return {
-      mca: {
-        // Username doesn't matter, was meant to be UUID originally
-        username: "thisreallydoesntmatter",
-        roles: [],
-        metadata: {},
-        // Access token used for authentication
-        access_token: accessToken,
-        // SSIDs expire every day, set to 86400 as a result
-        expires_in: 86400,
-        token_type: "Bearer",
-        obtainedOn: Date.now(),
-      },
-    };
-  }
-
-  private async saveAuthCacheObject(cacheFile: typeof FileCache, authCache: MinecraftAuthCache) {
-    // Save authentication cache using FileCache's setCachedPartial method (matching second file)
-    debug('saving auth cache', authCache);
-    await cacheFile.setCachedPartial({
-      mca: {
-        ...authCache.mca,
-        obtainedOn: Date.now(),
-      },
-      cookie: true
-    });
-  }
-
-  /**
-   * Process a single Microsoft account with puppeteer
-   *
-   * @param referencedUsername - Username for cache file naming
-   * @param cookieFilePath - Path to the cookie file
-   * @param proxyConfig - Proxy configuration
-   * @returns Promise resolving to an object containing success status and whether it came from cache
-   */
-  public async processAccount(
-    referencedUsername: string,
-    cookies: cookie.Cookie[],
-    proxyConfig?: ProxyConfig | string
-  ): Promise<ProcessAccRes> {
-    // Extract file name without extension
-
-    // First, check if we already have a valid cached token
-    const cachedToken = await this.getCachedAccessToken(referencedUsername);
-    if (cachedToken && cachedToken.valid) {
-      debug(`Already authenticated via cache: ${referencedUsername}`);
-      // Still add to alts.txt to ensure it's listed
-      return {
-        success: true,
-        fromCache: true,
-        token: cachedToken.token,
-      };
-    }
-
-    debug(`No valid cached token found, authenticating: ${referencedUsername}`);
-
-    // Parse proxy if string is provided
-    const proxy = typeof proxyConfig === "string" ? this.parseProxyString(proxyConfig) : proxyConfig;
-
+  public async getCachedAccessToken(referencedUsername: string, onlyCookieStorage = true): Promise<CachedTokenResult | undefined> {
     try {
-
-      const name = generateCacheFileName(this.cachePath, this.cacheName, referencedUsername)
-
-      // Create a FileCache instance for storing authentication data
-      const cacheFile = new FileCache(name);
-
-
-      if (cookies.length === 0) {
-        debug(`No valid cookies found in ${name}`);
-        return {
-          success: false,
-          fromCache: false,
-        };
-      }
-
-      const args = [];
-      let proxyUrl = null;
-      if (proxy != null) {
-        // Configure proxy URL
-
-        if (!proxy.username && !proxy.password) {
-          proxyUrl = new URL(`http://${proxy.server}:${proxy.port}`);
-        } else {
-          proxyUrl = new URL(`http://${proxy.username}:${proxy.password}@${proxy.server}:${proxy.port}`);
-        }
-        args.push(`--proxy-server=${proxyUrl.host}`);
-      }
-
-      // Launch browser with proxy
-      const browser = await puppeteer.launch({
-        args,
-        executablePath: this.executableName || undefined,
-        headless: this.headless,
-      });
-
-      const page = await browser.newPage();
-
-      if (proxyUrl != null && proxyUrl.username && proxyUrl.password) {
-        // Authenticate with proxy
-        await page.authenticate({
-          username: proxyUrl.username,
-          password: proxyUrl.password,
-        });
-      }
-
-      // Set user agent to avoid detection
-      await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0");
-
-      try {
-        // Clear existing cookies
-        const pageCookies = await page.cookies();
-        for (const cookie of pageCookies) {
-          await page.deleteCookie(cookie);
-        }
-
-        // Check if we have Microsoft login cookies
-        const hasMicrosoftCookies = cookies.some(
-          (cookie) => cookie.domain === ".live.com" || cookie.domain === "login.live.com" || cookie.domain === ".login.live.com"
-        );
-
-        if (hasMicrosoftCookies) {
-          // Navigate to login page first
-          await page.goto("https://login.live.com", { waitUntil: "networkidle0" });
-          // Set our cookies
-          await page.setCookie(...cookies);
-        } else {
-          debug(`Warning: No Microsoft login cookies found for ${referencedUsername}`);
-        }
-
-        // Authentication process
-        await page.goto("https://login.live.com", { waitUntil: "networkidle0" });
-        await page.reload({ waitUntil: "networkidle0" });
-        await page.goto("https://www.minecraft.net/en-us/login", { waitUntil: "networkidle0" });
-
-        // Click Microsoft login button
-        const msaButton = '[data-testid="MSALoginButtonLink"]';
-        await page.waitForSelector(msaButton);
-        await page.click(msaButton);
-
-        // Wait for login process
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-
-        // Navigate to profile page to get authentication token
-        await page.goto("https://www.minecraft.net/en-us/msaprofile/mygames", { waitUntil: "networkidle0" });
-
-        // Extract access token from cookies
-        const cookieString = await page.evaluate(() => document.cookie);
-        const accessToken = this.extractAccessToken(cookieString);
-
-        if (accessToken.startsWith("ey")) {
-          debug(`✅ Successfully authenticated: ${referencedUsername}`);
-
-          // Create authentication cache object
-          const authCache = this.createAuthCacheObject(accessToken);
-          await this.saveAuthCacheObject(cacheFile, authCache);
-
-          return {
-            success: true,
-            fromCache: false,
-            token: accessToken,
-          };
-        } else {
-          debug(`❌ Authentication failed for ${referencedUsername} - Invalid or locked account`);
-          debug(`Extracted token: ${accessToken}`);
-          return {
-            success: false,
-            fromCache: false,
-          };
-        }
-      } finally {
-        await browser.close();
-      }
-    } catch (error) {
-      console.error(`Error processing account ${referencedUsername}:`, error);
-      return {
-        success: false,
-        fromCache: false,
-        error: (error as Error).message,
-      };
-    }
-  }
-
-  /**
-   * Get cached access token (matching the second file's implementation)
-   *
-   * @param referencedUsername - Username for cache file naming
-   * @returns Cached access token information or undefined if not found/invalid
-   */
-  public async getCachedAccessToken(referencedUsername: string, onlyCookieStorage=true) {
-    // Create a FileCache instance for retrieving authentication data
-    const cacheFile = new FileCache(generateCacheFileName(this.cachePath, this.cacheName, referencedUsername));
-
-    try {
-      const { mca: token, cookie } = await cacheFile.getCached();
-      debug("token cache", token, 'is from cookie:', !!cookie);
+      const { mca: token, cookie } = await this.getCacheFile(referencedUsername).getCached();
+      debug("token cache", token, "is from cookie:", !!cookie);
       if (!token || (onlyCookieStorage && !cookie)) return;
 
       const expires = token.obtainedOn + token.expires_in * 1000;
@@ -322,22 +78,282 @@ class MinecraftAuthenticator {
     }
   }
 
-  /**
-   * Get the usable token for a referenced username, either from cache or by authenticating
-   *
-   * @param referencedUsername - Username for cache file naming
-   * @param cookieFilePath - Path to the cookie file
-   * @param proxyConfig - Optional proxy configuration
-   * @returns The authentication token if successful
-   */
+  protected createAuthCacheObject(accessToken: string, username = "thisreallydoesntmatter"): MinecraftAuthCache {
+    return {
+      mca: {
+        username,
+        roles: [],
+        metadata: {},
+        access_token: accessToken,
+        expires_in: 86400,
+        token_type: "Bearer",
+        obtainedOn: Date.now(),
+      },
+    };
+  }
+
+  protected async saveAuthCacheObject(cacheFile: typeof FileCache, authCache: MinecraftAuthCache) {
+    debug("saving auth cache", authCache);
+    await cacheFile.setCachedPartial({
+      mca: {
+        ...authCache.mca,
+        obtainedOn: Date.now(),
+      },
+      cookie: true,
+    });
+  }
+}
+
+abstract class BaseCookieAuthenticator extends CookieCacheManager implements CookieAuthenticator {
+  protected async getCachedProcessResult(referencedUsername: string): Promise<ProcessAccRes | undefined> {
+    const cachedToken = await this.getCachedAccessToken(referencedUsername);
+    if (!cachedToken?.valid) return undefined;
+
+    debug(`Already authenticated via cache: ${referencedUsername}`);
+    return {
+      success: true,
+      fromCache: true,
+      token: cachedToken.token,
+    };
+  }
+
+  protected validateCookies(cacheFileName: string, cookies: cookie.Cookie[]): ProcessAccRes | undefined {
+    if (cookies.length !== 0) return undefined;
+
+    debug(`No valid cookies found in ${cacheFileName}`);
+    return {
+      success: false,
+      fromCache: false,
+    };
+  }
+
+  public abstract processAccount(
+    referencedUsername: string,
+    cookies: cookie.Cookie[],
+    proxyConfig?: ProxyConfig | string
+  ): Promise<ProcessAccRes>;
+
   public async getToken(referencedUsername: string, cookies: cookie.Cookie[], proxyConfig?: ProxyConfig | string) {
     const result = await this.processAccount(referencedUsername, cookies, proxyConfig);
-    if (result.success) {
-      return result.token;
-    }
+    if (result.success) return result.token;
+
     throw new Error(result.fromCache ? "Failed to get token from cache" : "Failed to authenticate with provided credentials");
   }
 }
 
-// Export the class
-export { MinecraftAuthenticator };
+export class BrowserlessCookieAuthenticator extends BaseCookieAuthenticator {
+  constructor(cachePath = path.join(__dirname, "cache"), cacheName = "mca") {
+    super(cachePath, cacheName);
+  }
+
+  public async processAccount(
+    referencedUsername: string,
+    cookies: cookie.Cookie[],
+    proxyConfig?: ProxyConfig | string
+  ): Promise<ProcessAccRes> {
+    const cachedResult = await this.getCachedProcessResult(referencedUsername);
+    if (cachedResult) return cachedResult;
+
+    const cacheFile = this.getCacheFile(referencedUsername);
+    const validationError = this.validateCookies(generateCacheFileName(this.cachePath, this.cacheName, referencedUsername), cookies);
+    if (validationError) return validationError;
+
+    try {
+      const result = await authenticateWithBrowserlessCookies(cookies, proxyConfig);
+      if (!result?.accessToken) {
+        debug(`Browserless cookie authentication did not produce a token for ${referencedUsername}`);
+        return {
+          success: false,
+          fromCache: false,
+        };
+      }
+
+      debug(`Successfully authenticated via browserless cookies: ${referencedUsername} (${result.username})`);
+      await this.saveAuthCacheObject(cacheFile, this.createAuthCacheObject(result.accessToken, result.uuid));
+
+      return {
+        success: true,
+        fromCache: false,
+        token: result.accessToken,
+      };
+    } catch (error) {
+      debug(`Browserless cookie authentication failed for ${referencedUsername}:`, error);
+      return {
+        success: false,
+        fromCache: false,
+        error: (error as Error).message,
+      };
+    }
+  }
+}
+
+export class BrowserCookieAuthenticator extends BaseCookieAuthenticator {
+  private readonly headless: boolean;
+  private readonly executableName: string;
+
+  constructor(cachePath = path.join(__dirname, "cache"), headless = false, executableName = "", cacheName = "mca") {
+    super(cachePath, cacheName);
+    this.headless = headless;
+    this.executableName = executableName;
+  }
+
+  private extractAccessToken(cookieString: string): string {
+    const bearerToken = "bearer_token=";
+    const start = cookieString.indexOf(bearerToken) + bearerToken.length;
+    if (start <= bearerToken.length) return "";
+
+    const end = cookieString.indexOf(";", start);
+    return end === -1 ? cookieString.substring(start) : cookieString.substring(start, end);
+  }
+
+  public async processAccount(
+    referencedUsername: string,
+    cookies: cookie.Cookie[],
+    proxyConfig?: ProxyConfig | string
+  ): Promise<ProcessAccRes> {
+    const cachedResult = await this.getCachedProcessResult(referencedUsername);
+    if (cachedResult) return cachedResult;
+
+    const proxy = buildProxyUrl(proxyConfig);
+    if (proxy) assertBrowserProxy(proxy);
+
+    const cacheFile = this.getCacheFile(referencedUsername);
+    const validationError = this.validateCookies(generateCacheFileName(this.cachePath, this.cacheName, referencedUsername), cookies);
+    if (validationError) return validationError;
+
+    try {
+      const args = [];
+      let proxyUrl = null;
+      if (proxy != null) {
+        proxyUrl = new URL(proxy.url);
+        args.push(`--proxy-server=${proxyUrl.protocol}//${proxyUrl.host}`);
+      }
+
+      const browser = await puppeteer.launch({
+        args,
+        executablePath: this.executableName || undefined,
+        headless: this.headless,
+      });
+
+      const page = await browser.newPage();
+
+      if (proxyUrl != null && proxyUrl.username && proxyUrl.password) {
+        await page.authenticate({
+          username: decodeURIComponent(proxyUrl.username),
+          password: decodeURIComponent(proxyUrl.password),
+        });
+      }
+
+      await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0");
+
+      try {
+        const pageCookies = await page.cookies();
+        for (const cookie of pageCookies) {
+          await page.deleteCookie(cookie);
+        }
+
+        const hasMicrosoftCookies = cookies.some(
+          (cookie) => cookie.domain === ".live.com" || cookie.domain === "login.live.com" || cookie.domain === ".login.live.com"
+        );
+
+        if (hasMicrosoftCookies) {
+          await page.goto("https://login.live.com", { waitUntil: "networkidle0" });
+          await page.setCookie(...cookies);
+        } else {
+          debug(`Warning: No Microsoft login cookies found for ${referencedUsername}`);
+        }
+
+        await page.goto("https://login.live.com", { waitUntil: "networkidle0" });
+        await page.reload({ waitUntil: "networkidle0" });
+        await page.goto("https://www.minecraft.net/en-us/login", { waitUntil: "networkidle0" });
+
+        const msaButton = '[data-testid="MSALoginButtonLink"]';
+        await page.waitForSelector(msaButton);
+        await page.click(msaButton);
+
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        await page.goto("https://www.minecraft.net/en-us/msaprofile/mygames", { waitUntil: "networkidle0" });
+
+        const cookieString = await page.evaluate(() => document.cookie);
+        const accessToken = this.extractAccessToken(cookieString);
+
+        if (!accessToken.startsWith("ey")) {
+          debug(`Authentication failed for ${referencedUsername} - invalid or locked account`);
+          debug(`Extracted token: ${accessToken}`);
+          return {
+            success: false,
+            fromCache: false,
+          };
+        }
+
+        debug(`Successfully authenticated via browser cookies: ${referencedUsername}`);
+        await this.saveAuthCacheObject(cacheFile, this.createAuthCacheObject(accessToken));
+
+        return {
+          success: true,
+          fromCache: false,
+          token: accessToken,
+        };
+      } finally {
+        await browser.close();
+      }
+    } catch (error) {
+      console.error(`Error processing account ${referencedUsername}:`, error);
+      return {
+        success: false,
+        fromCache: false,
+        error: (error as Error).message,
+      };
+    }
+  }
+}
+
+class AutoCookieAuthenticator extends CookieCacheManager implements CookieAuthenticator {
+  private readonly browserless: BrowserlessCookieAuthenticator;
+  private readonly browser: BrowserCookieAuthenticator;
+
+  constructor(
+    cachePath = path.join(__dirname, "cache"),
+    headless = false,
+    executableName = "",
+    cacheName = "mca"
+  ) {
+    super(cachePath, cacheName);
+    this.browserless = new BrowserlessCookieAuthenticator(cachePath, cacheName);
+    this.browser = new BrowserCookieAuthenticator(cachePath, headless, executableName, cacheName);
+  }
+
+  public async processAccount(referencedUsername: string, cookies: cookie.Cookie[], proxyConfig?: ProxyConfig | string) {
+    const browserlessResult = await this.browserless.processAccount(referencedUsername, cookies, proxyConfig);
+    if (browserlessResult.success) return browserlessResult;
+
+    debug(`Browserless auth failed for ${referencedUsername}; trying browser auth`);
+    return this.browser.processAccount(referencedUsername, cookies, proxyConfig);
+  }
+
+  public async getToken(referencedUsername: string, cookies: cookie.Cookie[], proxyConfig?: ProxyConfig | string) {
+    const result = await this.processAccount(referencedUsername, cookies, proxyConfig);
+    if (result.success) return result.token;
+
+    throw new Error(result.fromCache ? "Failed to get token from cache" : "Failed to authenticate with provided credentials");
+  }
+}
+
+export function createCookieAuthenticator(
+  authMethod: CookieAuthMethod = "auto",
+  cachePath = path.join(__dirname, "cache"),
+  headless = false,
+  executableName = "",
+  cacheName = "mca"
+): CookieAuthenticator {
+  switch (authMethod) {
+    case "browserless":
+      return new BrowserlessCookieAuthenticator(cachePath, cacheName);
+    case "browser":
+      return new BrowserCookieAuthenticator(cachePath, headless, executableName, cacheName);
+    case "auto":
+      return new AutoCookieAuthenticator(cachePath, headless, executableName, cacheName);
+  }
+}
+
+export { BrowserCookieAuthenticator as MinecraftAuthenticator };

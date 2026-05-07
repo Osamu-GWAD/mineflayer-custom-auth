@@ -1,5 +1,5 @@
 import path from "path";
-import { MinecraftAuthenticator } from "./cookies/cookieManager";
+import { CookieCacheManager, createCookieAuthenticator } from "./cookies/cookieManager";
 import { buildJavaPatchedManager, buildLivePatchedManager } from "./tokenAccess";
 import { BotOptions, createBot as oldCreateBot } from "mineflayer";
 import type { Client, ClientOptions } from "minecraft-protocol";
@@ -61,29 +61,29 @@ async function authenticateWithCache(client: Client, clientOptions: ClientOption
 
   // technically, this will always be a string. potential typing error on pris-auth's end?
   const cachePath = clientOptions.profilesFolder as unknown as string; // validated above.
-  const auth = new MinecraftAuthenticator(cachePath, cookieOptions.headless, cookieOptions.executablePath);
+  const auth = createCookieAuthenticator(
+    cookieOptions.authMethod ?? "auto",
+    cachePath,
+    cookieOptions.headless,
+    cookieOptions.executablePath,
+    "mca"
+  );
   const proxy = cookieOptions.proxy;
 
 
-  try {
-    // Try to pre-authenticate and prepare cache
-    const authResult = await auth.processAccount(clientOptions.username, cookieOptions.cookies, proxy);
-
-    if (authResult.success) {
-      debug(`Pre-authentication ${authResult.fromCache ? "from cache" : "successful"}`);
-    }
-  } catch (err) {
-    debug("Pre-authentication failed:", err);
-  } finally {
-    // Always use minecraft-protocol's built-in auth as fallback
-    await microsoftAuth.authenticate(client, clientOptions);
+  const authResult = await auth.processAccount(clientOptions.username, cookieOptions.cookies, proxy);
+  if (!authResult.success) {
+    throw new Error(authResult.error ?? "Cookie authentication failed before Minecraft protocol authentication.");
   }
+
+  debug(`Pre-authentication ${authResult.fromCache ? "from cache" : "successful"}`);
+  await microsoftAuth.authenticate(client, clientOptions);
 }
 
 const maybeClearCookieCache = async (client: Client, clientOptions: ClientOptions) => {
   validateOptions(clientOptions);
   const cachePath = clientOptions.profilesFolder as unknown as string; // validated above.
-  const auth = new MinecraftAuthenticator(cachePath);
+  const auth = new CookieCacheManager(cachePath);
 
   try {
     const res = await auth.getCachedAccessToken(clientOptions.username);

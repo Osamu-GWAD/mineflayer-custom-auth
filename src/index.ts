@@ -1,4 +1,10 @@
-export { MinecraftAuthenticator } from "./cookies/cookieManager";
+export {
+  BrowserCookieAuthenticator,
+  BrowserlessCookieAuthenticator,
+  CookieCacheManager,
+  createCookieAuthenticator,
+  MinecraftAuthenticator,
+} from "./cookies/cookieManager";
 
 import {cookie} from './cookies/cookie'
 import type { ClientOptions } from "minecraft-protocol";
@@ -24,7 +30,7 @@ declare module "minecraft-protocol" {
 }
 
 
-export type { CookieOptions } from "./types";
+export type { CookieAuthMethod, CookieOptions } from "./types";
 export { createBot } from "./impl";
 export { cookie } from './cookies/cookie';
 export { buildJavaPatchedManager as buildPatchedManager } from "./tokenAccess";

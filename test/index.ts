@@ -17,8 +17,10 @@ const bot = createBot({
     profilesFolder: __dirname + '/cache',  
     cookieOptions: {
         cookies: cookies,
-        headless: false
-        // executablePath: '/path/to/chrome' // optional
+        headless: false,
+        // executablePath: '/path/to/chrome', // optional
+        // proxy: "https://127.0.0.1:8080" // browser and browserless
+        // proxy: "socks5://127.0.0.1:1080" // browserless only
     }
 })
 

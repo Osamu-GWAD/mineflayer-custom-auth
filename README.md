@@ -36,8 +36,10 @@ const bot = createBot({
   auth: "cookies",
   cookieOptions: {
     cookies,
+    // authMethod: "auto", // "auto" tries browserless cookies first, then Puppeteer.
     // headless: false,
-    // proxy: "127.0.0.1:1080",
+    // proxy: "https://127.0.0.1:8080", // browser and browserless
+    // proxy: "socks5://127.0.0.1:1080", // browserless only
   },
 });
 
@@ -70,7 +72,10 @@ bot.on("spawn", () => {
 ## Notes
 
 - If you switch the same username between `microsoft` auth and `cookies` auth, the cookie cache may be cleared.
-- Proxy support is HTTP-only right now. Do not include `http://` or `https://` in the proxy string.
+- Cookie auth supports `authMethod: "auto" | "browserless" | "browser"`. Use `"browserless"` to force the browserless cookie flow, or `"browser"` to force Puppeteer.
+- Proxy strings should include a scheme, such as `https://127.0.0.1:8080` or `socks5://user:pass@127.0.0.1:1080`.
+- The browserless cookie flow supports `http://`, `https://`, `socks://`, `socks4://`, and `socks5://` proxies.
+- The Puppeteer browser cookie flow supports only `http://` and `https://` proxies and throws if given a SOCKS proxy.
 - The `accessToken` flow relies on the same upstream Microsoft auth path in `minecraft-protocol`, but swaps in your supplied Minecraft token through a patched `prismarine-auth` manager.
 
 ## Support

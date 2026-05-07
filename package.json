@@ -20,7 +20,10 @@
   },
   "dependencies": {
     "debug": "^4.4.0",
+    "https-proxy-agent": "^9.0.0",
     "minecraft-folder-path": "^1.2.0",
-    "puppeteer": "^24.4.0"
+    "puppeteer": "^24.4.0",
+    "socks-proxy-agent": "^10.0.0",
+    "user-agents": "^2.1.53"
   }
 }

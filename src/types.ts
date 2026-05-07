@@ -7,15 +7,19 @@ import { cookie } from "./cookies/cookie";
 export interface ProxyConfig {
   server: string;
   port: string;
-  username: string;
-  password: string;
+  username?: string;
+  password?: string;
+  protocol?: "http" | "https" | "socks" | "socks4" | "socks5";
 }
+
+export type CookieAuthMethod = "auto" | "browserless" | "browser";
 
 export interface CookieOptions {
   cookies: cookie.Cookie[];
   proxy?: ProxyConfig | string;
   headless?: boolean;
   executablePath?: string;
+  authMethod?: CookieAuthMethod;
 }
 
 
