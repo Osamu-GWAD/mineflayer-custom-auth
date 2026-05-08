@@ -19,13 +19,14 @@ const bot = createBot({
     cookieOptions: {
         // headless: false,
         cookies: cookies,
-        authMethod: 'browserless'   
+        authMethod: 'browserless',   
 
         // HTTP(S) proxies work with browserless and browser auth.
         // proxy: "https://127.0.0.1:8080"
 
         // SOCKS proxies work with browserless auth only.
         // proxy: "socks5://127.0.0.1:1080"
+        // allowUnsafeProxyTls: true
     },
 })
 

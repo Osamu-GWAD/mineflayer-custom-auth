@@ -36,6 +36,11 @@ type RequestOptions = {
   headers?: Record<string, string>;
   body?: string;
   proxy?: ProxyConfig | string;
+  allowUnsafeProxyTls?: boolean;
+};
+
+type BrowserlessAuthOptions = {
+  allowUnsafeProxyTls?: boolean;
 };
 
 type ContinueForm = {
@@ -210,6 +215,7 @@ function request(urlString: string, options: RequestOptions = {}) {
       hasBody: !!options.body,
       headerNames: Object.keys(options.headers ?? {}),
       proxy: proxy ? proxy.protocol.replace(":", "") : "none",
+      tlsVerification: options.allowUnsafeProxyTls ? "disabled" : "enabled",
     });
 
     const startedAt = Date.now();
@@ -222,6 +228,7 @@ function request(urlString: string, options: RequestOptions = {}) {
         headers: options.headers ?? {},
         agent: proxyAgent,
         maxHeaderSize: 256 * 1024,
+        rejectUnauthorized: options.allowUnsafeProxyTls ? false : undefined,
       },
       (res) => {
         let body = "";
@@ -444,7 +451,7 @@ function writeDebugPage(name: string, response: HttpResponse) {
   debug("debug-page:written", file);
 }
 
-async function getSisuAuthorizeUrl(proxy?: ProxyConfig | string) {
+async function getSisuAuthorizeUrl(proxy: ProxyConfig | string | undefined, options: BrowserlessAuthOptions) {
   const connectUrl = buildSisuConnectUrl();
   debug("sisu-connect:start", redactUrl(connectUrl));
 
@@ -456,6 +463,7 @@ async function getSisuAuthorizeUrl(proxy?: ProxyConfig | string) {
       Connection: "close",
     },
     proxy,
+    allowUnsafeProxyTls: options.allowUnsafeProxyTls,
   });
 
   const location = getRedirectLocation(response, connectUrl);
@@ -472,7 +480,7 @@ async function getSisuAuthorizeUrl(proxy?: ProxyConfig | string) {
   return buildFallbackMicrosoftAuthorizeUrl();
 }
 
-async function requestMicrosoftAuthorize(authorizeUrl: string, jar: BrowserlessCookieJar, proxy?: ProxyConfig | string) {
+async function requestMicrosoftAuthorize(authorizeUrl: string, jar: BrowserlessCookieJar, proxy: ProxyConfig | string | undefined, options: BrowserlessAuthOptions) {
   const cookieHeader = getCookieHeader(jar, authorizeUrl, isMicrosoftAuthorizeHost(authorizeUrl));
   if (cookieHeader == null) return undefined;
 
@@ -485,6 +493,7 @@ async function requestMicrosoftAuthorize(authorizeUrl: string, jar: BrowserlessC
       Connection: "close",
     },
     proxy,
+    allowUnsafeProxyTls: options.allowUnsafeProxyTls,
   });
 
   storeSetCookies(jar, response, authorizeUrl);
@@ -495,7 +504,8 @@ async function submitMicrosoftContinueForm(
   fromUrl: string,
   response: HttpResponse,
   jar: BrowserlessCookieJar,
-  proxy?: ProxyConfig | string
+  proxy: ProxyConfig | string | undefined,
+  options: BrowserlessAuthOptions
 ): Promise<{ url: string; response: HttpResponse } | undefined> {
   const form = extractMicrosoftContinueForm(response.body, fromUrl);
   if (!form) return undefined;
@@ -523,6 +533,7 @@ async function submitMicrosoftContinueForm(
     },
     body: form.method === "POST" ? form.body : undefined,
     proxy,
+    allowUnsafeProxyTls: options.allowUnsafeProxyTls,
   });
 
   storeSetCookies(jar, nextResponse, requestUrl);
@@ -533,7 +544,8 @@ async function resolveMicrosoftAuthorizeRedirect(
   authorizeUrl: string,
   authorizeResponse: HttpResponse,
   jar: BrowserlessCookieJar,
-  proxy?: ProxyConfig | string
+  proxy: ProxyConfig | string | undefined,
+  options: BrowserlessAuthOptions
 ) {
   let currentUrl = authorizeUrl;
   let currentResponse = authorizeResponse;
@@ -550,7 +562,7 @@ async function resolveMicrosoftAuthorizeRedirect(
       if (isSisuCallback(location)) return location;
       if (!isAllowedMicrosoftIntermediate(location)) return location;
 
-      const nextResponse = await requestMicrosoftAuthorize(location, jar, proxy);
+      const nextResponse = await requestMicrosoftAuthorize(location, jar, proxy, options);
       if (!nextResponse) {
         writeDebugPage("microsoft-redirect-missing-cookies", currentResponse);
         return undefined;
@@ -561,7 +573,7 @@ async function resolveMicrosoftAuthorizeRedirect(
       continue;
     }
 
-    const continued = await submitMicrosoftContinueForm(currentUrl, currentResponse, jar, proxy);
+    const continued = await submitMicrosoftContinueForm(currentUrl, currentResponse, jar, proxy, options);
     if (!continued) {
       writeDebugPage(`microsoft-authorize-${getMicrosoftPageKind(currentResponse.body)}`, currentResponse);
       debug("microsoft-authorize:stopped", {
@@ -582,19 +594,19 @@ async function resolveMicrosoftAuthorizeRedirect(
   return undefined;
 }
 
-async function getXblIdentityTokenFromSisu(cookies: cookie.Cookie[], proxy?: ProxyConfig | string) {
+async function getXblIdentityTokenFromSisu(cookies: cookie.Cookie[], proxy: ProxyConfig | string | undefined, options: BrowserlessAuthOptions) {
   debug("silent-auth:start");
   const jar = createCookieJar(cookies);
 
-  const authorizeUrl = await getSisuAuthorizeUrl(proxy);
+  const authorizeUrl = await getSisuAuthorizeUrl(proxy, options);
   const cookieHeader = getCookieHeader(jar, authorizeUrl, true);
   if (!cookieHeader) return failSilentAuth("missing_cookie_header", { authorizeUrl: redactUrl(authorizeUrl) });
 
   debug("microsoft-authorize:start", redactUrl(authorizeUrl));
-  const authorizeResponse = await requestMicrosoftAuthorize(authorizeUrl, jar, proxy);
+  const authorizeResponse = await requestMicrosoftAuthorize(authorizeUrl, jar, proxy, options);
   if (!authorizeResponse) return failSilentAuth("missing_cookie_header", { authorizeUrl: redactUrl(authorizeUrl) });
 
-  const sisuCallbackUrl = await resolveMicrosoftAuthorizeRedirect(authorizeUrl, authorizeResponse, jar, proxy);
+  const sisuCallbackUrl = await resolveMicrosoftAuthorizeRedirect(authorizeUrl, authorizeResponse, jar, proxy, options);
   if (!sisuCallbackUrl) {
     const pageKind = getMicrosoftPageKind(authorizeResponse.body);
     return failSilentAuth(pageKind === "continue" ? "microsoft_continue_no_redirect" : "microsoft_no_sisu_redirect", {
@@ -624,6 +636,7 @@ async function getXblIdentityTokenFromSisu(cookies: cookie.Cookie[], proxy?: Pro
       Connection: "close",
     },
     proxy,
+    allowUnsafeProxyTls: options.allowUnsafeProxyTls,
   });
 
   const minecraftRedirectUrl = getRedirectLocation(callbackResponse, sisuCallbackUrl);
@@ -660,7 +673,7 @@ async function getXblIdentityTokenFromSisu(cookies: cookie.Cookie[], proxy?: Pro
   return fields.accessToken;
 }
 
-async function loginWithMinecraft(sisuAccessToken: string, proxy?: ProxyConfig | string) {
+async function loginWithMinecraft(sisuAccessToken: string, proxy: ProxyConfig | string | undefined, options: BrowserlessAuthOptions) {
   const identityToken = buildMinecraftIdentityToken(sisuAccessToken);
 
   debug("minecraft-login:start", {
@@ -679,6 +692,7 @@ async function loginWithMinecraft(sisuAccessToken: string, proxy?: ProxyConfig |
       ensureLegacyEnabled: true,
     }),
     proxy,
+    allowUnsafeProxyTls: options.allowUnsafeProxyTls,
   });
 
   assertStatus(response, 200, "Minecraft login");
@@ -690,7 +704,7 @@ async function loginWithMinecraft(sisuAccessToken: string, proxy?: ProxyConfig |
   return data.access_token;
 }
 
-async function getMinecraftProfile(accessToken: string, proxy?: ProxyConfig | string): Promise<{ id: string; name: string }> {
+async function getMinecraftProfile(accessToken: string, proxy: ProxyConfig | string | undefined, options: BrowserlessAuthOptions): Promise<{ id: string; name: string }> {
   debug("minecraft-profile:start");
 
   const response = await request(ENDPOINTS.minecraftProfile, {
@@ -699,6 +713,7 @@ async function getMinecraftProfile(accessToken: string, proxy?: ProxyConfig | st
       Accept: "application/json",
     },
     proxy,
+    allowUnsafeProxyTls: options.allowUnsafeProxyTls,
   });
 
   assertStatus(response, 200, "Minecraft profile lookup");
@@ -719,13 +734,14 @@ async function getMinecraftProfile(accessToken: string, proxy?: ProxyConfig | st
 
 export async function authenticateWithBrowserlessCookies(
   cookies: cookie.Cookie[],
-  proxy?: ProxyConfig | string
+  proxy?: ProxyConfig | string,
+  options: BrowserlessAuthOptions = {}
 ): Promise<CookieBrowserlessAuthResult | undefined> {
-  const xblIdentityToken = await getXblIdentityTokenFromSisu(cookies, proxy);
+  const xblIdentityToken = await getXblIdentityTokenFromSisu(cookies, proxy, options);
   if (!xblIdentityToken) return undefined;
 
-  const minecraftAccessToken = await loginWithMinecraft(xblIdentityToken, proxy);
-  const profile = await getMinecraftProfile(minecraftAccessToken, proxy);
+  const minecraftAccessToken = await loginWithMinecraft(xblIdentityToken, proxy, options);
+  const profile = await getMinecraftProfile(minecraftAccessToken, proxy, options);
 
   return {
     username: profile.name,

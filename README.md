@@ -40,6 +40,7 @@ const bot = createBot({
     // headless: false,
     // proxy: "https://127.0.0.1:8080", // browser and browserless
     // proxy: "socks5://127.0.0.1:1080", // browserless only
+    // allowUnsafeProxyTls: true, // bypasses TLS certificate failures from intercepting proxies
   },
 });
 
@@ -76,6 +77,7 @@ bot.on("spawn", () => {
 - Proxy strings should include a scheme, such as `https://127.0.0.1:8080` or `socks5://user:pass@127.0.0.1:1080`.
 - The browserless cookie flow supports `http://`, `https://`, `socks://`, `socks4://`, and `socks5://` proxies.
 - The Puppeteer browser cookie flow supports only `http://` and `https://` proxies and throws if given a SOCKS proxy.
+- `allowUnsafeProxyTls: true` can bypass TLS certificate failures caused by intercepting proxies. This is unsafe because the proxy may see or modify auth traffic.
 - The `accessToken` flow relies on the same upstream Microsoft auth path in `minecraft-protocol`, but swaps in your supplied Minecraft token through a patched `prismarine-auth` manager.
 
 ## Support

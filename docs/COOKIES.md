@@ -31,9 +31,12 @@ cookieOptions: {
   cookies,
   authMethod: "browserless",
   proxy: "socks5://127.0.0.1:1080",
+  allowUnsafeProxyTls: true,
 }
 ```
 
 The browserless flow supports `http://`, `https://`, `socks://`, `socks4://`, and `socks5://` proxies.
 
 The Puppeteer browser flow supports only `http://` and `https://` proxies. It throws a runtime error if you pass `socks://`, `socks4://`, or `socks5://`.
+
+`allowUnsafeProxyTls: true` disables TLS certificate verification for cookie auth. Browserless mode uses Node's unsafe TLS setting; browser mode launches Chrome with `--ignore-certificate-errors`. Use this only when you explicitly accept the risk of an intercepting proxy seeing or modifying auth traffic.

@@ -66,7 +66,10 @@ async function authenticateWithCache(client: Client, clientOptions: ClientOption
     cachePath,
     cookieOptions.headless,
     cookieOptions.executablePath,
-    "mca"
+    "mca",
+    {
+      allowUnsafeProxyTls: cookieOptions.allowUnsafeProxyTls,
+    }
   );
   const proxy = cookieOptions.proxy;
 

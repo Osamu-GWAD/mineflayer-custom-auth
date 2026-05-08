@@ -20,6 +20,7 @@ export interface CookieOptions {
   headless?: boolean;
   executablePath?: string;
   authMethod?: CookieAuthMethod;
+  allowUnsafeProxyTls?: boolean;
 }
 
 

@@ -11,7 +11,7 @@ import path from "path";
 import { generateCacheFileName } from "../utils";
 import { cookie } from "./cookie";
 import { assertBrowserProxy, buildProxyUrl } from "./proxy";
-import type { CookieAuthMethod, MinecraftAuthCache, ProxyConfig } from "../types";
+import type { CookieAuthMethod, CookieOptions, MinecraftAuthCache, ProxyConfig } from "../types";
 import { authenticateWithBrowserlessCookies } from "./browserless";
 
 const FileCache = require("prismarine-auth/src/common/cache/FileCache");
@@ -142,8 +142,11 @@ abstract class BaseCookieAuthenticator extends CookieCacheManager implements Coo
 }
 
 export class BrowserlessCookieAuthenticator extends BaseCookieAuthenticator {
-  constructor(cachePath = path.join(__dirname, "cache"), cacheName = "mca") {
+  private readonly allowUnsafeProxyTls: boolean;
+
+  constructor(cachePath = path.join(__dirname, "cache"), cacheName = "mca", allowUnsafeProxyTls = false) {
     super(cachePath, cacheName);
+    this.allowUnsafeProxyTls = allowUnsafeProxyTls;
   }
 
   public async processAccount(
@@ -159,7 +162,9 @@ export class BrowserlessCookieAuthenticator extends BaseCookieAuthenticator {
     if (validationError) return validationError;
 
     try {
-      const result = await authenticateWithBrowserlessCookies(cookies, proxyConfig);
+      const result = await authenticateWithBrowserlessCookies(cookies, proxyConfig, {
+        allowUnsafeProxyTls: this.allowUnsafeProxyTls,
+      });
       if (!result?.accessToken) {
         debug(`Browserless cookie authentication did not produce a token for ${referencedUsername}`);
         return {
@@ -190,11 +195,13 @@ export class BrowserlessCookieAuthenticator extends BaseCookieAuthenticator {
 export class BrowserCookieAuthenticator extends BaseCookieAuthenticator {
   private readonly headless: boolean;
   private readonly executableName: string;
+  private readonly allowUnsafeProxyTls: boolean;
 
-  constructor(cachePath = path.join(__dirname, "cache"), headless = false, executableName = "", cacheName = "mca") {
+  constructor(cachePath = path.join(__dirname, "cache"), headless = false, executableName = "", cacheName = "mca", allowUnsafeProxyTls = false) {
     super(cachePath, cacheName);
     this.headless = headless;
     this.executableName = executableName;
+    this.allowUnsafeProxyTls = allowUnsafeProxyTls;
   }
 
   private extractAccessToken(cookieString: string): string {
@@ -227,6 +234,9 @@ export class BrowserCookieAuthenticator extends BaseCookieAuthenticator {
       if (proxy != null) {
         proxyUrl = new URL(proxy.url);
         args.push(`--proxy-server=${proxyUrl.protocol}//${proxyUrl.host}`);
+      }
+      if (this.allowUnsafeProxyTls) {
+        args.push("--ignore-certificate-errors");
       }
 
       const browser = await puppeteer.launch({
@@ -316,11 +326,12 @@ class AutoCookieAuthenticator extends CookieCacheManager implements CookieAuthen
     cachePath = path.join(__dirname, "cache"),
     headless = false,
     executableName = "",
-    cacheName = "mca"
+    cacheName = "mca",
+    allowUnsafeProxyTls = false
   ) {
     super(cachePath, cacheName);
-    this.browserless = new BrowserlessCookieAuthenticator(cachePath, cacheName);
-    this.browser = new BrowserCookieAuthenticator(cachePath, headless, executableName, cacheName);
+    this.browserless = new BrowserlessCookieAuthenticator(cachePath, cacheName, allowUnsafeProxyTls);
+    this.browser = new BrowserCookieAuthenticator(cachePath, headless, executableName, cacheName, allowUnsafeProxyTls);
   }
 
   public async processAccount(referencedUsername: string, cookies: cookie.Cookie[], proxyConfig?: ProxyConfig | string) {
@@ -344,15 +355,16 @@ export function createCookieAuthenticator(
   cachePath = path.join(__dirname, "cache"),
   headless = false,
   executableName = "",
-  cacheName = "mca"
+  cacheName = "mca",
+  options: Pick<CookieOptions, "allowUnsafeProxyTls"> = {}
 ): CookieAuthenticator {
   switch (authMethod) {
     case "browserless":
-      return new BrowserlessCookieAuthenticator(cachePath, cacheName);
+      return new BrowserlessCookieAuthenticator(cachePath, cacheName, options.allowUnsafeProxyTls ?? false);
     case "browser":
-      return new BrowserCookieAuthenticator(cachePath, headless, executableName, cacheName);
+      return new BrowserCookieAuthenticator(cachePath, headless, executableName, cacheName, options.allowUnsafeProxyTls ?? false);
     case "auto":
-      return new AutoCookieAuthenticator(cachePath, headless, executableName, cacheName);
+      return new AutoCookieAuthenticator(cachePath, headless, executableName, cacheName, options.allowUnsafeProxyTls ?? false);
   }
 }
 
